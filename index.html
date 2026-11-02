@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Local, privacy-first evidence hashing and sensitive-text redaction.">
+  <title>CyberShield Evidence Analyzer</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#637083; --line:#dbe2ec; --blue:#2457d6; --bg:#f5f7fb; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); background:var(--bg); }
+    header { background:#111c35; color:white; padding:30px 20px; }
+    header .wrap, main { max-width:920px; margin:auto; }
+    h1 { margin:0 0 6px; font-size:clamp(1.7rem,4vw,2.4rem); }
+    header p { margin:0; color:#d8e2ff; }
+    main { padding:24px 16px 48px; display:grid; gap:18px; }
+    section { background:white; border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:0 4px 18px #14213d08; }
+    h2 { margin:0 0 8px; font-size:1.2rem; }
+    p, .hint { color:var(--muted); }
+    label { display:block; font-weight:600; margin:12px 0 6px; }
+    input[type=file], textarea { width:100%; border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; font:inherit; }
+    textarea { min-height:160px; resize:vertical; }
+    button, .download { display:inline-block; border:0; border-radius:8px; background:var(--blue); color:white; font-weight:650; padding:10px 15px; cursor:pointer; text-decoration:none; margin:10px 8px 0 0; }
+    button:disabled { opacity:.55; cursor:wait; }
+    pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#f3f6fb; border:1px solid var(--line); border-radius:8px; padding:12px; min-height:36px; }
+    .notice { border-left:4px solid #d69a18; background:#fff9e9; padding:12px 14px; border-radius:6px; color:#654b12; }
+    .status { min-height:24px; color:#2457d6; font-weight:600; }
+    footer { text-align:center; color:var(--muted); padding:0 16px 28px; font-size:.9rem; }
+  </style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1>CyberShield Evidence Analyzer</h1>
+  <p>Privacy-first evidence hashing and sensitive-text redaction</p>
+</div></header>
+<main>
+  <div class="notice"><strong>Use responsibly:</strong> only handle evidence you own or are authorized to process. Files and text are processed in your browser and are not uploaded by this page. Redaction is best-effort; review the result before sharing.</div>
+
+  <section>
+    <h2>1. Evidence file manifest</h2>
+    <p>Select evidence files to calculate SHA-256 hashes and create a downloadable inventory. Original files are not changed.</p>
+    <label for="evidenceFiles">Choose files</label>
+    <input id="evidenceFiles" type="file" multiple>
+    <button id="manifestBtn">Create manifest</button>
+    <a id="manifestDownload" class="download" hidden download="evidence-manifest.json">Download JSON manifest</a>
+    <div id="manifestStatus" class="status" role="status"></div>
+    <pre id="manifestPreview">Your manifest will appear here.</pre>
+  </section>
+
+  <section>
+    <h2>2. Redact sensitive text</h2>
+    <p>Paste or type text to mask common CNIC-like IDs, email addresses, Pakistan-style mobile numbers, and long digit sequences.</p>
+    <label for="sourceText">Text to review</label>
+    <textarea id="sourceText" placeholder="Paste text here. Avoid entering information you are not authorized to handle."></textarea>
+    <button id="redactBtn">Redact text</button>
+    <button id="copyBtn" type="button">Copy result</button>
+    <a id="textDownload" class="download" hidden download="redacted-text.txt">Download redacted text</a>
+    <div id="redactStatus" class="status" role="status"></div>
+    <pre id="redactedPreview">Redacted output will appear here.</pre>
+  </section>
+</main>
+<footer>CyberShield is a lightweight helper, not a forensic certification or legal chain-of-custody system.</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+let latestRedacted = "";
+
+function saveBlob(anchor, content, type) {
+  const url = URL.createObjectURL(new Blob([content], {type}));
+  if (anchor.dataset.url) URL.revokeObjectURL(anchor.dataset.url);
+  anchor.href = url;
+  anchor.dataset.url = url;
+  anchor.hidden = false;
+}
+
+function hex(buffer) {
+  return [...new Uint8Array(buffer)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+$("manifestBtn").addEventListener("click", async () => {
+  const files = [...$("evidenceFiles").files];
+  if (!files.length) { $("manifestStatus").textContent = "Choose at least one file first."; return; }
+  const button = $("manifestBtn");
+  button.disabled = true;
+  $("manifestStatus").textContent = "Calculating hashes locally…";
+  try {
+    const evidence = [];
+    for (const file of files) {
+      const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+      evidence.push({
+        filename: file.name,
+        size_bytes: file.size,
+        last_modified: new Date(file.lastModified).toISOString(),
+        sha256: hex(digest)
+      });
+    }
+    const report = {
+      tool: "CyberShield Evidence Analyzer",
+      created_utc: new Date().toISOString(),
+      evidence_count: evidence.length,
+      notice: "Local inventory only; preserve original evidence separately.",
+      evidence
+    };
+    const json = JSON.stringify(report, null, 2);
+    $("manifestPreview").textContent = json;
+    saveBlob($("manifestDownload"), json, "application/json");
+    $("manifestStatus").textContent = `Manifest created for ${evidence.length} file(s).`;
+  } catch (err) {
+    $("manifestStatus").textContent = "Could not create manifest: " + err.message;
+  } finally { button.disabled = false; }
+});
+
+function redact(text) {
+  const rules = [
+    ["CNIC", /(?<!\d)\d{5}-\d{7}-\d(?!\d)/g],
+    ["EMAIL", /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi],
+    ["PHONE", /(?<!\d)(?:\+?92[- ]?)?03\d{2}[- ]?\d{7}(?!\d)/g],
+    ["LONG_NUMBER", /(?<!\d)(?:\d[ -]?){13,19}(?!\d)/g]
+  ];
+  const counts = {};
+  let output = text;
+  for (const [label, regex] of rules) {
+    let count = 0;
+    output = output.replace(regex, () => { count++; return `[REDACTED:${label}]`; });
+    counts[label] = count;
+  }
+  return {output, counts};
+}
+
+$("redactBtn").addEventListener("click", () => {
+  const result = redact($("sourceText").value);
+  latestRedacted = result.output;
+  $("redactedPreview").textContent = latestRedacted || "(No text entered.)";
+  $("redactStatus").textContent = "Matches: " + Object.entries(result.counts).map(([k,v]) => `${k}: ${v}`).join(" · ");
+  saveBlob($("textDownload"), latestRedacted, "text/plain;charset=utf-8");
+});
+$("copyBtn").addEventListener("click", async () => {
+  if (!latestRedacted) { $("redactStatus").textContent = "Redact some text first."; return; }
+  try { await navigator.clipboard.writeText(latestRedacted); $("redactStatus").textContent = "Redacted result copied."; }
+  catch { $("redactStatus").textContent = "Clipboard access unavailable; use Download redacted text."; }
+});
+</script>
+</body>
+</html>
